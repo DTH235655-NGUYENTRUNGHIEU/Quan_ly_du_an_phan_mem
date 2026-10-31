@@ -1,14 +1,35 @@
 <?php
-session_start();
-require_once __DIR__ . '/../../config/database.php';
+// modules/admin/staff_manager.php
 require_once __DIR__ . '/../../config/constants.php';
+require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../includes/auth.php';
 
-// Chỉ cho phép Administrator (role_id = 1) truy cập quản lý nhân sự
-if (!isset($_SESSION['user_id']) || (isset($_SESSION['role_id']) && (int)$_SESSION['role_id'] !== 1)) {
-    header('Location: ../../index.php');
+// Đảm bảo chỉ Administrator mới được truy cập trang Quản lý Nhân sự & Phân quyền
+if (!has_role(['Administrator'])) {
+    header('Location: ' . BASE_URL . 'modules/admin/dashboard.php');
     exit;
 }
+
+// Đảm bảo biến kết nối PDO tương thích với config/database.php
+if (!isset($pdo)) {
+    if (isset($conn) && $conn instanceof PDO) {
+        $pdo = $conn;
+    } elseif (function_exists('getDB')) {
+        $pdo = getDB();
+    } else {
+        $dbHost = defined('DB_HOST') ? DB_HOST : '127.0.0.1';
+        $dbName = defined('DB_NAME') ? DB_NAME : 'tour_dulich_vietnam';
+        $dbUser = defined('DB_USER') ? DB_USER : 'root';
+        $dbPass = defined('DB_PASS') ? DB_PASS : '';
+        $pdo = new PDO("mysql:host={$dbHost};dbname={$dbName};charset=utf8mb4", $dbUser, $dbPass, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
+        ]);
+    }
+}
+
+$currentUser = current_user();
+$currentUserId = (int)($currentUser['user_id'] ?? $_SESSION['user_id'] ?? 0);
 
 $message = '';
 $error   = '';
@@ -28,7 +49,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $status   = $_POST['status'] ?? 'Active';
 
         if ($fullname === '' || $username === '' || $email === '' || $password === '') {
-            $error = 'Vui lòng nhập đầy đủ họ tên, tài khoản, email và mật khẩu.';
+            $error = 'Vui lòng nhập đầy đủ họ tên, tên đăng nhập, email và mật khẩu.';
         } else {
             try {
                 $password_hash = password_hash($password, PASSWORD_BCRYPT);
@@ -45,14 +66,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ':phone'         => $phone,
                     ':status'        => $status
                 ]);
-                $message = "Đã thêm nhân viên {$fullname} và phân quyền thành công!";
+                $message = "Đã thêm nhân viên «{$fullname}» và cấp quyền thành công!";
             } catch (PDOException $e) {
-                $error = 'Lỗi: Tên đăng nhập hoặc Email đã tồn tại trên hệ thống.';
+                $error = 'Không thể tạo tài khoản: Username hoặc Email đã tồn tại trên hệ thống.';
             }
         }
     }
 
-    // 2. CẬP NHẬT THÔNG TIN & ĐỔI QUYỀN NHÂN VIÊN
+    // 2. CẬP NHẬT THÔNG TIN & ĐỔI PHÂN QUYỀN NHÂN VIÊN
     if ($action === 'edit') {
         $user_id  = (int)($_POST['user_id'] ?? 0);
         $fullname = trim($_POST['fullname'] ?? '');
@@ -62,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $status   = $_POST['status'] ?? 'Active';
         $password = $_POST['password'] ?? '';
 
-        if ($user_id === (int)$_SESSION['user_id'] && ($role_id !== 1 || $status !== 'Active')) {
+        if ($user_id === $currentUserId && ($role_id !== 1 || $status !== 'Active')) {
             $error = 'Bạn không thể tự hạ quyền hoặc tự khóa tài khoản Quản trị viên đang đăng nhập.';
         } else {
             try {
@@ -99,9 +120,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         ':user_id'  => $user_id
                     ]);
                 }
-                $message = "Cập nhật thông tin và phân quyền nhân viên #{$user_id} thành công!";
+                $message = "Đã cập nhật thông tin và phân quyền cho nhân viên #{$user_id}!";
             } catch (PDOException $e) {
-                $error = 'Không thể cập nhật: Email có thể bị trùng với tài khoản khác.';
+                $error = 'Lỗi cập nhật: Email có thể đã trùng với một tài khoản khác.';
             }
         }
     }
@@ -109,7 +130,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // 3. XÓA NHÂN VIÊN
     if ($action === 'delete') {
         $user_id = (int)($_POST['user_id'] ?? 0);
-        if ($user_id === (int)$_SESSION['user_id']) {
+        if ($user_id === $currentUserId) {
             $error = 'Không thể xóa tài khoản Quản trị viên đang đăng nhập!';
         } else {
             try {
@@ -117,27 +138,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([':user_id' => $user_id]);
                 $message = "Đã xóa nhân viên #{$user_id} khỏi hệ thống.";
             } catch (PDOException $e) {
-                $error = 'Không thể xóa nhân viên này. Hãy chuyển trạng thái sang Locked (Khóa).';
+                $error = 'Không thể xóa nhân viên này do ràng buộc dữ liệu. Vui lòng chuyển trạng thái sang Locked.';
             }
         }
     }
 }
 
-// Lấy danh sách các vai trò nội bộ (role_id từ 1 đến 5, trừ Customer = 6)
+// Lấy danh sách các vai trò nội bộ công ty (role_id từ 1 đến 5, không lấy Customer = 6)
 $rolesStmt = $pdo->query("SELECT * FROM roles WHERE role_id != 6 ORDER BY role_id ASC");
 $roles = $rolesStmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Lọc danh sách nhân sự
+// Bộ lọc chức vụ & từ khóa
 $filterRole = isset($_GET['role_id']) ? (int)$_GET['role_id'] : 0;
+$keyword    = isset($_GET['q']) ? trim($_GET['q']) : '';
+
 $sqlStaff = "SELECT u.*, r.role_name, r.description AS role_desc 
              FROM users u 
              INNER JOIN roles r ON u.role_id = r.role_id 
              WHERE u.role_id != 6";
 $params = [];
+
 if ($filterRole > 0) {
     $sqlStaff .= " AND u.role_id = :role_id";
     $params[':role_id'] = $filterRole;
 }
+if ($keyword !== '') {
+    $sqlStaff .= " AND (u.fullname LIKE :kw OR u.username LIKE :kw OR u.email LIKE :kw OR u.phone LIKE :kw)";
+    $params[':kw'] = '%' . $keyword . '%';
+}
+
 $sqlStaff .= " ORDER BY u.role_id ASC, u.user_id DESC";
 $stmtStaff = $pdo->prepare($sqlStaff);
 $stmtStaff->execute($params);
@@ -146,210 +175,310 @@ $staffList = $stmtStaff->fetchAll(PDO::FETCH_ASSOC);
 include __DIR__ . '/../../includes/header.php';
 ?>
 
-<div class="container-fluid py-4">
-    <div class="row">
-        <div class="col-md-3 col-lg-2">
-            <?php include __DIR__ . '/../../includes/admin_sidebar.php'; ?>
-        </div>
-        <div class="col-md-9 col-lg-10">
-            <div class="d-flex justify-content-between align-items-center mb-3">
-                <h3 class="fw-bold mb-0">Quản lý Nhân sự & Phân quyền</h3>
-                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addStaffModal">
-                    + Thêm nhân viên mới
-                </button>
+<div class="flex min-h-screen bg-slate-100">
+    <!-- Sidebar Quản trị -->
+    <?php include __DIR__ . '/../../includes/admin_sidebar.php'; ?>
+
+    <!-- Nội dung chính -->
+    <main class="flex-1 p-6 lg:p-8 overflow-x-auto">
+        <!-- Header trang -->
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+            <div>
+                <h1 class="text-2xl font-extrabold text-slate-800 tracking-tight">Quản lý Nhân sự & Phân quyền</h1>
+                <p class="text-xs text-slate-500 mt-1">Thêm mới, điều chỉnh cấp bậc phân quyền (Quản trị, Điều hành, Sales, HDV, Kế toán) và quản lý trạng thái tài khoản</p>
             </div>
+            <button type="button" onclick="openAddModal()" 
+                    class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition">
+                <i data-lucide="user-plus" class="w-4 h-4"></i> Thêm nhân viên mới
+            </button>
+        </div>
 
-            <?php if ($message): ?>
-                <div class="alert alert-success alert-dismissible fade show"><?= htmlspecialchars($message) ?></div>
-            <?php endif; ?>
-            <?php if ($error): ?>
-                <div class="alert alert-danger alert-dismissible fade show"><?= htmlspecialchars($error) ?></div>
-            <?php endif; ?>
-
-            <!-- Bộ lọc theo chức vụ / phân quyền -->
-            <form method="GET" class="row g-2 mb-3">
-                <div class="col-auto">
-                    <select name="role_id" class="form-select" onchange="this.form.submit()">
-                        <option value="0">-- Tất cả chức vụ / phòng ban --</option>
-                        <?php foreach ($roles as $r): ?>
-                            <option value="<?= $r['role_id'] ?>" <?= $filterRole === (int)$r['role_id'] ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($r['role_name']) ?> (<?= htmlspecialchars($r['description']) ?>)
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
+        <!-- Thông báo kết quả -->
+        <?php if ($message): ?>
+            <div class="mb-5 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-600"></i>
+                    <span><?= htmlspecialchars($message) ?></span>
                 </div>
-            </form>
+                <button type="button" onclick="this.parentElement.remove()" class="text-emerald-500 hover:text-emerald-700">✕</button>
+            </div>
+        <?php endif; ?>
 
-            <!-- Bảng danh sách nhân viên -->
-            <div class="card shadow-sm">
-                <div class="table-responsive">
-                    <table class="table table-hover align-middle mb-0">
-                        <thead class="table-light">
+        <?php if ($error): ?>
+            <div class="mb-5 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="alert-circle" class="w-4 h-4 text-rose-600"></i>
+                    <span><?= htmlspecialchars($error) ?></span>
+                </div>
+                <button type="button" onclick="this.parentElement.remove()" class="text-rose-500 hover:text-rose-700">✕</button>
+            </div>
+        <?php endif; ?>
+
+        <!-- Thanh công cụ tìm kiếm & lọc theo vai trò -->
+        <form method="GET" class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200/80 mb-6 flex flex-col md:flex-row gap-3 items-center">
+            <div class="relative flex-1 w-full">
+                <input type="text" name="q" value="<?= htmlspecialchars($keyword) ?>" 
+                       placeholder="Tìm theo họ tên, username, email hoặc số điện thoại..." 
+                       class="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3 top-2.5"></i>
+            </div>
+            <div class="w-full md:w-72">
+                <select name="role_id" onchange="this.form.submit()" 
+                        class="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="0">-- Tất cả chức vụ / phân quyền --</option>
+                    <?php foreach ($roles as $r): ?>
+                        <option value="<?= $r['role_id'] ?>" <?= $filterRole === (int)$r['role_id'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($r['role_name']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition">
+                Lọc dữ liệu
+            </button>
+            <?php if ($filterRole > 0 || $keyword !== ''): ?>
+                <a href="staff_manager.php" class="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold transition">
+                    Đặt lại
+                </a>
+            <?php endif; ?>
+        </form>
+
+        <!-- Bảng danh sách nhân viên -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80 overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500 tracking-wider">
+                            <th class="py-3.5 px-4">Mã NV</th>
+                            <th class="py-3.5 px-4">Họ và tên</th>
+                            <th class="py-3.5 px-4">Tài khoản</th>
+                            <th class="py-3.5 px-4">Liên hệ</th>
+                            <th class="py-3.5 px-4">Vai trò / Phân quyền</th>
+                            <th class="py-3.5 px-4">Trạng thái</th>
+                            <th class="py-3.5 px-4 text-right">Thao tác</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 text-xs text-slate-700">
+                        <?php if (empty($staffList)): ?>
                             <tr>
-                                <th>ID</th>
-                                <th>Họ và tên</th>
-                                <th>Tài khoản</th>
-                                <th>Email / SĐT</th>
-                                <th>Vai trò (Phân quyền)</th>
-                                <th>Trạng thái</th>
-                                <th class="text-end">Thao tác</th>
+                                <td colspan="7" class="py-8 text-center text-slate-400">Không tìm thấy nhân viên nào phù hợp.</td>
                             </tr>
-                        </thead>
-                        <tbody>
+                        <?php else: ?>
                             <?php foreach ($staffList as $st): ?>
-                                <tr>
-                                    <td>#<?= $st['user_id'] ?></td>
-                                    <td class="fw-semibold"><?= htmlspecialchars($st['fullname']) ?></td>
-                                    <td><code><?= htmlspecialchars($st['username']) ?></code></td>
-                                    <td>
-                                        <div><?= htmlspecialchars($st['email']) ?></div>
-                                        <small class="text-muted"><?= htmlspecialchars($st['phone']) ?></small>
+                                <?php
+                                $roleBadge = match ((int)$st['role_id']) {
+                                    1 => 'bg-purple-100 text-purple-700 border-purple-200',
+                                    2 => 'bg-blue-100 text-blue-700 border-blue-200',
+                                    3 => 'bg-amber-100 text-amber-700 border-amber-200',
+                                    4 => 'bg-teal-100 text-teal-700 border-teal-200',
+                                    5 => 'bg-indigo-100 text-indigo-700 border-indigo-200',
+                                    default => 'bg-slate-100 text-slate-700 border-slate-200'
+                                };
+                                $statusBadge = match ($st['status']) {
+                                    'Active'   => 'bg-emerald-100 text-emerald-700',
+                                    'Locked'   => 'bg-rose-100 text-rose-700',
+                                    default    => 'bg-slate-100 text-slate-600'
+                                };
+                                ?>
+                                <tr class="hover:bg-slate-50/80 transition">
+                                    <td class="py-3.5 px-4 font-bold text-slate-500">#<?= (int)$st['user_id'] ?></td>
+                                    <td class="py-3.5 px-4">
+                                        <div class="font-bold text-slate-800"><?= htmlspecialchars($st['fullname']) ?></div>
+                                        <div class="text-[11px] text-slate-400">Tạo ngày: <?= date('d/m/Y', strtotime($st['created_at'])) ?></div>
                                     </td>
-                                    <td>
-                                        <span class="badge bg-info text-dark"><?= htmlspecialchars($st['role_name']) ?></span>
-                                        <div class="small text-muted"><?= htmlspecialchars($st['role_desc']) ?></div>
+                                    <td class="py-3.5 px-4">
+                                        <span class="px-2.5 py-1 rounded-lg bg-slate-100 font-mono text-[11px] font-semibold text-slate-700">
+                                            <?= htmlspecialchars($st['username']) ?>
+                                        </span>
                                     </td>
-                                    <td>
-                                        <?php if ($st['status'] === 'Active'): ?>
-                                            <span class="badge bg-success">Active</span>
-                                        <?php elseif ($st['status'] === 'Locked'): ?>
-                                            <span class="badge bg-danger">Locked</span>
-                                        <?php else: ?>
-                                            <span class="badge bg-secondary">Inactive</span>
-                                        <?php endif; ?>
+                                    <td class="py-3.5 px-4">
+                                        <div class="font-medium text-slate-700"><?= htmlspecialchars($st['email']) ?></div>
+                                        <div class="text-[11px] text-slate-400"><?= htmlspecialchars($st['phone']) ?></div>
                                     </td>
-                                    <td class="text-end">
-                                        <button class="btn btn-sm btn-outline-primary" 
-                                                data-bs-toggle="modal" 
-                                                data-bs-target="#editStaffModal<?= $st['user_id'] ?>">
-                                            Sửa / Phân quyền
+                                    <td class="py-3.5 px-4">
+                                        <span class="inline-block px-2.5 py-1 rounded-lg border text-[11px] font-bold <?= $roleBadge ?>">
+                                            <?= htmlspecialchars($st['role_name']) ?>
+                                        </span>
+                                        <div class="text-[11px] text-slate-400 mt-1 max-w-xs"><?= htmlspecialchars($st['role_desc']) ?></div>
+                                    </td>
+                                    <td class="py-3.5 px-4">
+                                        <span class="inline-block px-2.5 py-1 rounded-full text-[11px] font-bold <?= $statusBadge ?>">
+                                            <?= htmlspecialchars($st['status']) ?>
+                                        </span>
+                                    </td>
+                                    <td class="py-3.5 px-4 text-right space-x-1.5 whitespace-nowrap">
+                                        <button type="button" 
+                                                onclick='openEditModal(<?= json_encode($st, JSON_HEX_APOS | JSON_HEX_QUOT) ?>)'
+                                                class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 font-bold text-[11px] transition">
+                                            <i data-lucide="edit-3" class="w-3.5 h-3.5"></i> Sửa / Phân quyền
                                         </button>
-                                        <?php if ((int)$st['user_id'] !== (int)$_SESSION['user_id']): ?>
-                                            <form method="POST" class="d-inline" onsubmit="return confirm('Bạn có chắc chắn muốn xóa nhân viên này?');">
+
+                                        <?php if ((int)$st['user_id'] !== $currentUserId): ?>
+                                            <form method="POST" class="inline-block" onsubmit="return confirm('Bạn có chắc chắn muốn xóa nhân viên <?= htmlspecialchars(addslashes($st['fullname'])) ?>?');">
                                                 <input type="hidden" name="action" value="delete">
-                                                <input type="hidden" name="user_id" value="<?= $st['user_id'] ?>">
-                                                <button type="submit" class="btn btn-sm btn-outline-danger">Xóa</button>
+                                                <input type="hidden" name="user_id" value="<?= (int)$st['user_id'] ?>">
+                                                <button type="submit" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-[11px] transition">
+                                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Xóa
+                                                </button>
                                             </form>
                                         <?php endif; ?>
                                     </td>
                                 </tr>
-
-                                <!-- Modal Sửa & Phân quyền nhân viên -->
-                                <div class="modal fade" id="editStaffModal<?= $st['user_id'] ?>" tabindex="-1">
-                                    <div class="modal-dialog">
-                                        <form method="POST" class="modal-content">
-                                            <div class="modal-header">
-                                                <h5 class="modal-title">Cập nhật & Phân quyền: <?= htmlspecialchars($st['fullname']) ?></h5>
-                                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                                            </div>
-                                            <div class="modal-body">
-                                                <input type="hidden" name="action" value="edit">
-                                                <input type="hidden" name="user_id" value="<?= $st['user_id'] ?>">
-                                                <div class="mb-2">
-                                                    <label class="form-label">Họ và tên</label>
-                                                    <input type="text" name="fullname" class="form-control" value="<?= htmlspecialchars($st['fullname']) ?>" required>
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label">Email</label>
-                                                    <input type="email" name="email" class="form-control" value="<?= htmlspecialchars($st['email']) ?>" required>
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label">Số điện thoại</label>
-                                                    <input type="text" name="phone" class="form-control" value="<?= htmlspecialchars($st['phone']) ?>" required>
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label fw-bold">Chức vụ / Cấp độ phân quyền</label>
-                                                    <select name="role_id" class="form-select" required>
-                                                        <?php foreach ($roles as $r): ?>
-                                                            <option value="<?= $r['role_id'] ?>" <?= (int)$st['role_id'] === (int)$r['role_id'] ? 'selected' : '' ?>>
-                                                                <?= htmlspecialchars($r['role_name']) ?> - <?= htmlspecialchars($r['description']) ?>
-                                                            </option>
-                                                        <?php endforeach; ?>
-                                                    </select>
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label">Trạng thái tài khoản</label>
-                                                    <select name="status" class="form-select">
-                                                        <option value="Active" <?= $st['status'] === 'Active' ? 'selected' : '' ?>>Active (Đang làm việc)</option>
-                                                        <option value="Inactive" <?= $st['status'] === 'Inactive' ? 'selected' : '' ?>>Inactive (Tạm nghỉ)</option>
-                                                        <option value="Locked" <?= $st['status'] === 'Locked' ? 'selected' : '' ?>>Locked (Khóa truy cập)</option>
-                                                    </select>
-                                                </div>
-                                                <div class="mb-2">
-                                                    <label class="form-label">Mật khẩu mới (Để trống nếu giữ nguyên)</label>
-                                                    <input type="password" name="password" class="form-control" placeholder="Nhập mật khẩu mới nếu cần đổi...">
-                                                </div>
-                                            </div>
-                                            <div class="modal-footer">
-                                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Đóng</button>
-                                                <button type="submit" class="btn btn-primary">Lưu thay đổi</button>
-                                            </div>
-                                        </form>
-                                    </div>
-                                </div>
                             <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
             </div>
         </div>
-    </div>
+    </main>
 </div>
 
-<!-- Modal Thêm nhân viên mới -->
-<div class="modal fade" id="addStaffModal" tabindex="-1">
-    <div class="modal-dialog">
-        <form method="POST" class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Thêm nhân viên mới & Phân quyền</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+<!-- MODAL THÊM NHÂN VIÊN MỚI -->
+<div id="addStaffModal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden">
+        <div class="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+            <h3 class="text-sm font-extrabold">Thêm nhân viên mới & Phân quyền</h3>
+            <button type="button" onclick="closeModal('addStaffModal')" class="text-slate-400 hover:text-white">✕</button>
+        </div>
+        <form method="POST" class="p-6 space-y-4 text-xs">
+            <input type="hidden" name="action" value="add">
+            <div>
+                <label class="block font-bold text-slate-700 mb-1">Họ và tên nhân viên *</label>
+                <input type="text" name="fullname" required placeholder="VD: Nguyễn Văn A"
+                       class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
-            <div class="modal-body">
-                <input type="hidden" name="action" value="add">
-                <div class="mb-2">
-                    <label class="form-label">Họ và tên nhân viên</label>
-                    <input type="text" name="fullname" class="form-control" required>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Tên đăng nhập (Username) *</label>
+                    <input type="text" name="username" required placeholder="VD: nv_sale01"
+                           class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
                 </div>
-                <div class="mb-2">
-                    <label class="form-label">Tên đăng nhập (Username)</label>
-                    <input type="text" name="username" class="form-control" required>
-                </div>
-                <div class="mb-2">
-                    <label class="form-label">Mật khẩu khởi tạo</label>
-                    <input type="password" name="password" class="form-control" required>
-                </div>
-                <div class="mb-2">
-                    <label class="form-label">Email công việc</label>
-                    <input type="email" name="email" class="form-control" required>
-                </div>
-                <div class="mb-2">
-                    <label class="form-label">Số điện thoại</label>
-                    <input type="text" name="phone" class="form-control" required>
-                </div>
-                <div class="mb-2">
-                    <label class="form-label fw-bold">Phân quyền chức vụ</label>
-                    <select name="role_id" class="form-select" required>
-                        <?php foreach ($roles as $r): ?>
-                            <option value="<?= $r['role_id'] ?>">
-                                <?= htmlspecialchars($r['role_name']) ?> - <?= htmlspecialchars($r['description']) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="mb-2">
-                    <label class="form-label">Trạng thái</label>
-                    <select name="status" class="form-select">
-                        <option value="Active">Active (Kích hoạt ngay)</option>
-                        <option value="Inactive">Inactive (Chưa kích hoạt)</option>
-                    </select>
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Mật khẩu khởi tạo *</label>
+                    <input type="password" name="password" required placeholder="Nhập mật khẩu..."
+                           class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
                 </div>
             </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Hủy</button>
-                <button type="submit" class="btn btn-success">Tạo tài khoản nhân viên</button>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Email công việc *</label>
+                    <input type="email" name="email" required placeholder="ten@dulichvietnam.vn"
+                           class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Số điện thoại *</label>
+                    <input type="text" name="phone" required placeholder="09xxxxxxxx"
+                           class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+            </div>
+            <div>
+                <label class="block font-bold text-blue-700 mb-1">Cấp độ Phân quyền (Role) *</label>
+                <select name="role_id" required class="w-full px-3.5 py-2 rounded-xl border border-blue-300 bg-blue-50/40 font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <?php foreach ($roles as $r): ?>
+                        <option value="<?= $r['role_id'] ?>">
+                            <?= htmlspecialchars($r['role_name']) ?> — <?= htmlspecialchars($r['description']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div>
+                <label class="block font-bold text-slate-700 mb-1">Trạng thái hoạt động</label>
+                <select name="status" class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="Active">Active (Đang làm việc)</option>
+                    <option value="Inactive">Inactive (Tạm ngưng)</option>
+                    <option value="Locked">Locked (Khóa tài khoản)</option>
+                </select>
+            </div>
+            <div class="pt-3 border-t border-slate-100 flex justify-end gap-2">
+                <button type="button" onclick="closeModal('addStaffModal')" class="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold">Hủy</button>
+                <button type="submit" class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold shadow">Tạo nhân viên</button>
             </div>
         </form>
     </div>
 </div>
+
+<!-- MODAL SỬA & PHÂN QUYỀN NHÂN VIÊN -->
+<div id="editStaffModal" class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden">
+        <div class="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+            <h3 class="text-sm font-extrabold">Cập nhật thông tin & Phân quyền nhân sự</h3>
+            <button type="button" onclick="closeModal('editStaffModal')" class="text-slate-400 hover:text-white">✕</button>
+        </div>
+        <form method="POST" class="p-6 space-y-4 text-xs">
+            <input type="hidden" name="action" value="edit">
+            <input type="hidden" name="user_id" id="edit_user_id">
+            <div>
+                <label class="block font-bold text-slate-700 mb-1">Họ và tên nhân viên *</label>
+                <input type="text" name="fullname" id="edit_fullname" required
+                       class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Email công việc *</label>
+                    <input type="email" name="email" id="edit_email" required
+                           class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Số điện thoại *</label>
+                    <input type="text" name="phone" id="edit_phone" required
+                           class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+            </div>
+            <div>
+                <label class="block font-bold text-blue-700 mb-1">Cấp độ Phân quyền (Role) *</label>
+                <select name="role_id" id="edit_role_id" required class="w-full px-3.5 py-2 rounded-xl border border-blue-300 bg-blue-50/40 font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <?php foreach ($roles as $r): ?>
+                        <option value="<?= $r['role_id'] ?>">
+                            <?= htmlspecialchars($r['role_name']) ?> — <?= htmlspecialchars($r['description']) ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Trạng thái tài khoản</label>
+                    <select name="status" id="edit_status" class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="Active">Active (Đang làm việc)</option>
+                        <option value="Inactive">Inactive (Tạm ngưng)</option>
+                        <option value="Locked">Locked (Khóa truy cập)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Đổi mật khẩu mới (Tùy chọn)</label>
+                    <input type="password" name="password" placeholder="Để trống nếu giữ nguyên"
+                           class="w-full px-3.5 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+            </div>
+            <div class="pt-3 border-t border-slate-100 flex justify-end gap-2">
+                <button type="button" onclick="closeModal('editStaffModal')" class="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold">Đóng</button>
+                <button type="submit" class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold shadow">Lưu cập nhật</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openAddModal() {
+    document.getElementById('addStaffModal').classList.remove('hidden');
+}
+
+function openEditModal(staff) {
+    document.getElementById('edit_user_id').value = staff.user_id;
+    document.getElementById('edit_fullname').value = staff.fullname;
+    document.getElementById('edit_email').value = staff.email;
+    document.getElementById('edit_phone').value = staff.phone;
+    document.getElementById('edit_role_id').value = staff.role_id;
+    document.getElementById('edit_status').value = staff.status;
+    document.getElementById('editStaffModal').classList.remove('hidden');
+}
+
+function closeModal(modalId) {
+    document.getElementById(modalId).classList.add('hidden');
+}
+
+if (typeof lucide !== 'undefined') {
+    lucide.createIcons();
+}
+</script>
 
 <?php include __DIR__ . '/../../includes/footer.php'; ?>

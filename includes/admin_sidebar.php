@@ -68,12 +68,21 @@ $current_page = basename($_SERVER['PHP_SELF']);
                 <i data-lucide="receipt" class="w-4 h-4"></i> Báo cáo doanh thu
             </a>
         <?php endif; ?>
+
+        <!-- 6. Quản trị Nhân sự & Phân quyền (Chỉ Administrator) -->
+        <?php if (has_role(['Administrator'])): ?>
+            <div class="pt-2 pb-1 text-[10px] font-bold uppercase text-slate-500 tracking-wider px-3">Hệ thống & Nhân sự</div>
+            <a href="<?= BASE_URL ?>modules/admin/staff_manager.php" 
+               class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition <?= $current_page === 'staff_manager.php' ? 'bg-blue-600 text-white shadow' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200' ?>">
+                <i data-lucide="users" class="w-4 h-4"></i> Quản lý Nhân sự & Phân quyền
+            </a>
+        <?php endif; ?>
     </nav>
 
     <!-- User Profile & Logout -->
     <div class="p-4 border-t border-slate-800 space-y-2">
         <div class="flex items-center justify-between text-xs">
-            <span class="text-slate-400 truncate max-w-[140px] font-medium"><?= htmlspecialchars($u['fullname']) ?></span>
+            <span class="text-slate-400 truncate max-w-[140px] font-medium"><?= htmlspecialchars($u['fullname'] ?? '') ?></span>
             <a href="<?= BASE_URL ?>modules/auth/logout.php" class="text-rose-400 hover:text-rose-300 font-bold" title="Đăng xuất">
                 <i data-lucide="log-out" class="w-4 h-4"></i>
             </a>
