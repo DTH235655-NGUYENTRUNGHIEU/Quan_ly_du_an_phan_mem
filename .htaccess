@@ -1,0 +1,13 @@
+Options -Indexes
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Chặn truy cập trực tiếp vào file cấu hình nếu người dùng gõ URL
+    RewriteRule ^config/ - [F,L]
+</IfModule>
+
+<FilesMatch "\.(sql|env|log|ini)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
