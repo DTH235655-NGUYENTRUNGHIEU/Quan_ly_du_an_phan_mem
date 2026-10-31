@@ -1,10 +1,24 @@
 <?php
 // includes/admin_sidebar.php
 require_once __DIR__ . '/../config/constants.php';
+require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/auth.php';
 
 $u = current_user();
 $current_page = basename($_SERVER['PHP_SELF']);
+
+// Đếm số chuyến đi sắp tới được phân công nếu là Hướng dẫn viên (Tour Guide)[cite: 2]
+$guide_assigned_count = 0;
+if ($u && isset($u['role_name']) && $u['role_name'] === 'Tour Guide' && isset($u['user_id']) && isset($pdo)) {
+    $stmtCount = $pdo->prepare("
+        SELECT COUNT(*) 
+        FROM tour_departures 
+        WHERE tour_guide_id = :guide_id 
+          AND status IN ('Mở bán', 'Sắp hết chỗ', 'Đã khóa sổ', 'Đã khởi hành')
+    ");
+    $stmtCount->execute(['guide_id' => $u['user_id']]);
+    $guide_assigned_count = (int)$stmtCount->fetchColumn();
+}
 ?>
 <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col shrink-0 min-h-screen">
     <!-- Brand Info -->
@@ -28,7 +42,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
             <i data-lucide="layout-dashboard" class="w-4 h-4"></i> Tổng quan hệ thống
         </a>
 
-        <!-- 2. Quản trị & Điều hành Tour (Admin & Tour Operator) -->
+        <!-- 2. Quản trị & Điều hành Tour (Admin & Tour Operator)[cite: 2] -->
         <?php if (has_role(['Administrator', 'Tour Operator'])): ?>
             <a href="<?= BASE_URL ?>modules/admin/tour_manager.php" 
                class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition <?= $current_page === 'tour_manager.php' ? 'bg-blue-600 text-white shadow' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200' ?>">
@@ -40,7 +54,23 @@ $current_page = basename($_SERVER['PHP_SELF']);
             </a>
         <?php endif; ?>
 
-        <!-- 3. Quản lý Đơn đặt & Khách hàng (Admin, Sales Staff, Accountant) -->
+        <!-- 2.1. Lịch phân công riêng cho Hướng dẫn viên (Tour Guide)[cite: 2] -->
+        <?php if (has_role(['Tour Guide'])): ?>
+            <a href="<?= BASE_URL ?>modules/admin/guide_assign.php" 
+               class="flex items-center justify-between px-3.5 py-2.5 rounded-xl transition <?= $current_page === 'guide_assign.php' ? 'bg-blue-600 text-white shadow' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200' ?>">
+                <div class="flex items-center gap-2.5">
+                    <i data-lucide="calendar-check" class="w-4 h-4 text-blue-400"></i>
+                    <span>Lịch phân công của tôi</span>
+                </div>
+                <?php if ($guide_assigned_count > 0): ?>
+                    <span class="bg-rose-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full animate-pulse shadow-sm">
+                        <?= $guide_assigned_count ?>
+                    </span>
+                <?php endif; ?>
+            </a>
+        <?php endif; ?>
+
+        <!-- 3. Quản lý Đơn đặt & Khách hàng (Admin, Sales Staff, Accountant)[cite: 2] -->
         <?php if (has_role(['Administrator', 'Sales Staff', 'Accountant'])): ?>
             <a href="<?= BASE_URL ?>modules/admin/booking_manager.php" 
                class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition <?= $current_page === 'booking_manager.php' ? 'bg-blue-600 text-white shadow' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200' ?>">
@@ -48,7 +78,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
             </a>
         <?php endif; ?>
 
-        <!-- 4. Duyệt đánh giá (Admin, Sales Staff) -->
+        <!-- 4. Duyệt đánh giá (Admin, Sales Staff)[cite: 2] -->
         <?php if (has_role(['Administrator', 'Sales Staff'])): ?>
             <a href="<?= BASE_URL ?>modules/reviews/review_manager.php" 
                class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition <?= $current_page === 'review_manager.php' ? 'bg-blue-600 text-white shadow' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200' ?>">
@@ -56,7 +86,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
             </a>
         <?php endif; ?>
 
-        <!-- 5. Kế toán & Tài chính (Admin, Accountant) -->
+        <!-- 5. Kế toán & Tài chính (Admin, Accountant)[cite: 2] -->
         <?php if (has_role(['Administrator', 'Accountant'])): ?>
             <div class="pt-2 pb-1 text-[10px] font-bold uppercase text-slate-500 tracking-wider px-3">Tài chính - Kế toán</div>
             <a href="<?= BASE_URL ?>modules/accounting/invoices_list.php" 
@@ -69,7 +99,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
             </a>
         <?php endif; ?>
 
-        <!-- 6. Quản trị Nhân sự & Phân quyền (Chỉ Administrator) -->
+        <!-- 6. Quản trị Nhân sự & Phân quyền (Chỉ Administrator)[cite: 2] -->
         <?php if (has_role(['Administrator'])): ?>
             <div class="pt-2 pb-1 text-[10px] font-bold uppercase text-slate-500 tracking-wider px-3">Hệ thống & Nhân sự</div>
             <a href="<?= BASE_URL ?>modules/admin/staff_manager.php" 
