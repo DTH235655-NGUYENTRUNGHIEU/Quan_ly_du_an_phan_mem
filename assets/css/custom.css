@@ -1,0 +1,54 @@
+/* Giao diện tùy chỉnh Công ty Du lịch Việt Nam */
+:root {
+    --primary-travel: #0d6efd;
+    --accent-travel: #ff6b35;
+}
+
+body {
+    scroll-behavior: smooth;
+    background-color: #f8fafc;
+}
+
+.tour-card {
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.tour-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1) !important;
+}
+
+.tour-card img {
+    height: 210px;
+    object-fit: cover;
+}
+
+.price-highlight {
+    color: var(--accent-travel);
+    font-weight: 700;
+    font-size: 1.2rem;
+}
+
+.table th {
+    white-space: nowrap;
+}
+
+/* Tối ưu in Hóa đơn GTGT (modules/accounting/invoice_detail.php) */
+@media print {
+    nav, header, footer, .sidebar, .btn, .no-print {
+        display: none !important;
+    }
+    body {
+        background: #fff !important;
+    }
+    .card, .container, .container-fluid {
+        box-shadow: none !important;
+        border: none !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+}
