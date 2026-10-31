@@ -4,13 +4,11 @@ require_once __DIR__ . '/../../config/constants.php';
 require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../includes/auth.php';
 
-// 1. Phân quyền chặt chẽ ngay từ đầu: Chỉ Admin và Kế toán viên mới được xem
 require_roles(['Administrator', 'Accountant']);
 
 $page_title = "Báo cáo Doanh thu & Quản lý Hóa đơn VAT";
 include '../../includes/header.php';
 
-// 2. Lấy dữ liệu doanh thu tháng hiện tại và năm nay từ 2 SQL Views
 $cur_year = date('Y');
 $cur_month = date('m');
 
@@ -22,27 +20,30 @@ $stmtYear = $pdo->prepare("SELECT * FROM v_yearly_revenue WHERE year = ?");
 $stmtYear->execute([$cur_year]);
 $year_data = $stmtYear->fetch();
 
-// 3. Lấy danh sách các hóa đơn đã phát hành gần nhất
 $invoices = $pdo->query("SELECT i.*, b.booking_code 
                          FROM invoices i 
                          JOIN bookings b ON i.booking_id = b.booking_id 
                          ORDER BY i.invoice_id DESC LIMIT 10")->fetchAll();
 ?>
 
+<!-- Nạp thư viện Chart.js vẽ biểu đồ -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
 <div class="flex min-h-screen bg-slate-100">
-    <!-- Nạp Sidebar Admin dùng chung đã phân quyền động -->
     <?php include '../../includes/admin_sidebar.php'; ?>
 
-    <!-- Main Content -->
     <main class="flex-1 p-8 space-y-6 overflow-y-auto">
-        <div class="flex items-center justify-between border-b border-slate-200 pb-4">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200 pb-4">
             <div>
                 <h1 class="text-2xl font-black text-slate-900">Báo Cáo Doanh Thu & Hóa Đơn Điện Tử VAT</h1>
-                <p class="text-xs text-slate-500">Tự động tổng hợp dữ liệu từ 2 View v_monthly_revenue và v_yearly_revenue</p>
+                <p class="text-xs text-slate-500">Tự động tổng hợp số liệu từ 2 View v_monthly_revenue và v_yearly_revenue</p>
             </div>
-            <span class="text-xs bg-emerald-100 text-emerald-800 font-semibold px-3 py-1 rounded-full border border-emerald-200">
-                Kỳ tài chính: Năm <?= $cur_year ?>
-            </span>
+            <div class="flex items-center gap-2">
+                <a href="<?= BASE_URL ?>modules/accounting/export_excel.php" 
+                   class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition shadow flex items-center gap-1.5">
+                    <i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Xuất Excel Báo Cáo
+                </a>
+            </div>
         </div>
 
         <!-- 3 Thẻ thống kê doanh thu -->
@@ -81,9 +82,22 @@ $invoices = $pdo->query("SELECT i.*, b.booking_code
             </div>
         </div>
 
-        <!-- Bảng danh sách hóa đơn điện tử VAT -->
+        <!-- Biểu đồ doanh thu 12 tháng -->
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+            <div class="flex items-center justify-between border-b pb-3">
+                <span class="text-xs font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                    <i data-lucide="bar-chart-3" class="w-4 h-4 text-blue-600"></i> Biểu Đồ Tăng Trưởng Doanh Thu Năm <?= $cur_year ?>
+                </span>
+                <span class="text-[11px] text-slate-400">Đơn vị: VNĐ</span>
+            </div>
+            <div class="h-64">
+                <canvas id="revenueChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Bảng hóa đơn điện tử -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-            <div class="p-4 bg-slate-50 border-b border-slate-200 font-bold text-sm text-slate-700 flex items-center gap-2">
+            <div class="p-4 bg-slate-50 border-b border-slate-200 font-bold text-xs text-slate-700 uppercase tracking-wide flex items-center gap-2">
                 <i data-lucide="file-text" class="w-4 h-4 text-blue-600"></i> Danh Sách Hóa Đơn VAT Vừa Phát Hành
             </div>
             <div class="overflow-x-auto">
@@ -105,7 +119,7 @@ $invoices = $pdo->query("SELECT i.*, b.booking_code
                         <?php foreach ($invoices as $inv): ?>
                             <tr class="hover:bg-slate-50 transition">
                                 <td class="p-3.5 font-bold text-blue-600"><?= $inv['invoice_number'] ?></td>
-                                <td class="p-3.5 font-mono text-slate-500"><?= $inv['booking_code'] ?></td>
+                                <td class="p-3.5 font-mono text-slate-500">#<?= $inv['booking_code'] ?></td>
                                 <td class="p-3.5 font-semibold text-slate-800"><?= htmlspecialchars($inv['buyer_name']) ?></td>
                                 <td class="p-3.5 font-mono text-slate-500"><?= $inv['tax_code'] ?: 'Khách cá nhân' ?></td>
                                 <td class="p-3.5 text-right"><?= number_format($inv['subtotal_amount'], 0, ',', '.') ?> đ</td>
@@ -117,7 +131,7 @@ $invoices = $pdo->query("SELECT i.*, b.booking_code
                                     </span>
                                 </td>
                                 <td class="p-3.5 text-center">
-                                    <a href="/dulichvietnam/modules/accounting/invoice_detail.php?id=<?= $inv['invoice_id'] ?>" 
+                                    <a href="<?= BASE_URL ?>modules/accounting/invoice_detail.php?id=<?= $inv['invoice_id'] ?>" target="_blank"
                                        class="inline-block bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white px-2.5 py-1 rounded text-[11px] font-bold transition">
                                         Xem & In
                                     </a>
@@ -131,6 +145,40 @@ $invoices = $pdo->query("SELECT i.*, b.booking_code
     </main>
 </div>
 
-<script>lucide.createIcons();</script>
+<script>
+    // Gọi API lấy dữ liệu và render biểu đồ Chart.js
+    fetch('<?= BASE_URL ?>api/get_chart_data.php?year=<?= $cur_year ?>')
+        .then(res => res.json())
+        .then(data => {
+            const ctx = document.getElementById('revenueChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        label: 'Doanh thu (VNĐ)',
+                        data: data.revenue,
+                        backgroundColor: 'rgba(37, 99, 235, 0.8)',
+                        borderColor: 'rgb(37, 99, 235)',
+                        borderWidth: 1,
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: val => new Intl.NumberFormat('vi-VN').format(val) + ' đ'
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    lucide.createIcons();
+</script>
 </body>
 </html>
