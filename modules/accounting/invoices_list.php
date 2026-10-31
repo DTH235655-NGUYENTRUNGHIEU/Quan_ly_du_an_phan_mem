@@ -3,8 +3,9 @@
 require_once __DIR__ . '/../../config/constants.php';
 require_once __DIR__ . '/../../config/database.php';
 require_once __DIR__ . '/../../includes/auth.php';
+require_once __DIR__ . '/../../includes/business_helpers.php';
 
-// 1. Phân quyền: Chỉ Administrator và Kế toán viên (Accountant) được thao tác
+// 1. Phân quyền: Chỉ Administrator và Kế toán viên (Accountant) được thao tác[cite: 2]
 require_roles(['Administrator', 'Accountant']);
 
 $currentUser = current_user();
@@ -22,7 +23,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     try {
         $pdo->beginTransaction();
 
-        // 2.1. Lấy thông tin đơn đặt tour kèm bảng giá khởi hành
+        // 2.1. Lấy thông tin đơn đặt tour kèm bảng giá khởi hành (Không sử dụng từ khóa JOIN)[cite: 2]
         $sqlB = "SELECT b.*, c.customer_id, c.fullname AS buyer_name, c.email AS buyer_email, c.phone AS buyer_phone,
                         t.title AS tour_title, dep.departure_id, p.price_adult, p.price_child, p.price_infant, p.single_supplement
                  FROM bookings b, customers c, tour_departures dep, tours t, tour_prices p
@@ -39,47 +40,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             throw new Exception("Không tìm thấy đơn đặt tour yêu cầu.");
         }
 
-        // Kiểm tra xem đơn này đã được xuất hóa đơn chưa
+        // Kiểm tra xem đơn này đã được xuất hóa đơn chưa[cite: 2]
         $stmtCheckInv = $pdo->prepare("SELECT invoice_id FROM invoices WHERE booking_id = ?");
         $stmtCheckInv->execute([$booking_id]);
         if ($stmtCheckInv->fetch()) {
             throw new Exception("Đơn tour này đã được phát hành hóa đơn VAT trước đó!");
         }
 
-        $remaining_amount = $book['total_amount'] - $book['paid_amount'];
+        $remaining_amount = (float)$book['total_amount'] - (float)$book['paid_amount'];
 
-        // 2.2. Nếu còn tiền chưa thanh toán, tạo phiếu thu Tất toán (bảng payments)
+        // 2.2. Nếu còn tiền chưa thanh toán, tạo phiếu thu Tất toán (bảng payments)[cite: 2]
         if ($remaining_amount > 0) {
             $pay_code = 'PAY' . date('ymd') . rand(100, 999);
             $stmtPay = $pdo->prepare("INSERT INTO payments (booking_id, payment_code, payment_method, payment_phase, amount, transaction_ref, status, processed_by) 
                                       VALUES (?, ?, ?, 'Tất toán', ?, 'TIEN-MAT-HOAC-CK', 'Thành công', ?)");
             $stmtPay->execute([$booking_id, $pay_code, $payment_method, $remaining_amount, $currentUser['user_id']]);
 
-            // Cập nhật bookings sang Đã thanh toán đủ
+            // Cập nhật bookings sang Đã thanh toán đủ và chuyển trạng thái sang Hoàn tất[cite: 2]
             $stmtUpBook = $pdo->prepare("UPDATE bookings 
                                          SET paid_amount = total_amount, 
-                                             payment_status = 'Đã thanh toán đủ' 
+                                             payment_status = 'Đã thanh toán đủ',
+                                             booking_status = 'Hoàn tất'
                                          WHERE booking_id = ?");
             $stmtUpBook->execute([$booking_id]);
 
-            // Cộng điểm thưởng tích lũy cho khách hàng (100.000đ = 1 điểm)
-            $points_earned = max(10, floor($book['total_amount'] / 100000));
-            $pdo->prepare("UPDATE customers SET reward_points = reward_points + ? WHERE customer_id = ?")
-                ->execute([$points_earned, $book['customer_id']]);
+            // Tự động cộng điểm thưởng cho khách hàng (100.000đ = 1 điểm)[cite: 2]
+            reward_points_on_booking_complete($pdo, $booking_id);
         }
 
-        // 2.3. Tính toán thuế VAT chuẩn 8.0%
-        $total_amount = $book['total_amount'];
+        // 2.3. Tính toán thuế VAT chuẩn 8.0%[cite: 2]
+        $total_amount = (float)$book['total_amount'];
         $vat_rate = 8.0;
         $subtotal_amount = round($total_amount / (1 + ($vat_rate / 100)));
         $vat_amount = $total_amount - $subtotal_amount;
 
-        // Sinh số hóa đơn theo thứ tự tăng dần trong năm (HD2026-xxxx)
+        // Sinh số hóa đơn theo thứ tự tăng dần trong năm (HD2026-xxxx)[cite: 2]
         $cur_year = date('Y');
-        $countInvoices = $pdo->query("SELECT COUNT(*) FROM invoices WHERE YEAR(issue_date) = {$cur_year}")->fetchColumn();
+        $stmtCountInv = $pdo->prepare("SELECT COUNT(*) FROM invoices WHERE YEAR(issue_date) = ?");
+        $stmtCountInv->execute([$cur_year]);
+        $countInvoices = (int)$stmtCountInv->fetchColumn();
         $invoice_number = 'HD' . $cur_year . '-' . str_pad($countInvoices + 1, 4, '0', STR_PAD_LEFT);
 
-        // 2.4. Lưu vào bảng invoices
+        // 2.4. Lưu vào bảng invoices[cite: 2]
         $stmtInv = $pdo->prepare("INSERT INTO invoices (booking_id, invoice_number, invoice_series, buyer_name, company_name, tax_code, company_address, buyer_email, payment_method, subtotal_amount, vat_rate, vat_amount, total_amount, status, created_by) 
                                   VALUES (?, ?, 'C26TAA', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Đã phát hành', ?)");
         $stmtInv->execute([
@@ -97,36 +99,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $total_amount,
             $currentUser['user_id']
         ]);
-        $invoice_id = $pdo->lastInsertId();
+        $invoice_id = (int)$pdo->lastInsertId();
 
-        // 2.5. Tách và ghi các dòng dịch vụ chi tiết vào bảng invoice_details
+        // 2.5. Tách và ghi các dòng dịch vụ chi tiết vào bảng invoice_details[cite: 2]
         $stmtDet = $pdo->prepare("INSERT INTO invoice_details (invoice_id, item_type, item_name, unit, quantity, unit_price, discount_amount, amount) 
                                   VALUES (?, ?, ?, 'Khách', ?, ?, 0, ?)");
 
-        // Dòng vé người lớn
-        if ($book['num_adults'] > 0) {
-            $amt_adult = $book['num_adults'] * $book['price_adult'];
+        // Dòng vé người lớn[cite: 2]
+        if ((int)$book['num_adults'] > 0) {
+            $amt_adult = (int)$book['num_adults'] * (float)$book['price_adult'];
             $stmtDet->execute([$invoice_id, 'Vé người lớn', $book['tour_title'] . ' (Người lớn)', $book['num_adults'], $book['price_adult'], $amt_adult]);
         }
 
-        // Dòng vé trẻ em
-        if ($book['num_children'] > 0) {
-            $amt_child = $book['num_children'] * $book['price_child'];
+        // Dòng vé trẻ em[cite: 2]
+        if ((int)$book['num_children'] > 0) {
+            $amt_child = (int)$book['num_children'] * (float)$book['price_child'];
             $stmtDet->execute([$invoice_id, 'Vé trẻ em', $book['tour_title'] . ' (Trẻ em 5-11 tuổi)', $book['num_children'], $book['price_child'], $amt_child]);
         }
 
-        // Dòng vé em bé
-        if ($book['num_infants'] > 0) {
-            $stmtDet->execute([$invoice_id, 'Vé em bé', $book['tour_title'] . ' (Em bé dưới 5 tuổi)', $book['num_infants'], $book['price_infant'], $book['num_infants'] * $book['price_infant']]);
+        // Dòng vé em bé[cite: 2]
+        if ((int)$book['num_infants'] > 0) {
+            $amt_infant = (int)$book['num_infants'] * (float)($book['price_infant'] ?? 0);
+            $stmtDet->execute([$invoice_id, 'Vé em bé', $book['tour_title'] . ' (Em bé dưới 5 tuổi)', $book['num_infants'], $book['price_infant'] ?? 0, $amt_infant]);
         }
 
-        // Dòng phụ thu phòng đơn (nếu có khách đăng ký ở phòng riêng)
+        // Dòng phụ thu phòng đơn (ràng buộc trực tiếp theo số khách chọn single_room = 1)[cite: 2]
         $singleCount = $pdo->prepare("SELECT COUNT(*) FROM booking_passengers WHERE booking_id = ? AND single_room = 1");
         $singleCount->execute([$booking_id]);
-        $singles = $singleCount->fetchColumn();
+        $singles = (int)$singleCount->fetchColumn();
 
-        if ($singles > 0) {
-            $amt_single = $singles * $book['single_supplement'];
+        if ($singles > 0 && (float)$book['single_supplement'] > 0) {
+            $amt_single = $singles * (float)$book['single_supplement'];
             $pdo->prepare("INSERT INTO invoice_details (invoice_id, item_type, item_name, unit, quantity, unit_price, discount_amount, amount) 
                            VALUES (?, 'Phụ thu phòng đơn', 'Phụ thu phòng riêng cho hành khách', 'Phòng', ?, ?, 0, ?)")
                 ->execute([$invoice_id, $singles, $book['single_supplement'], $amt_single]);
@@ -140,7 +143,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
-// 3. Lấy danh sách các đơn đặt tour đã duyệt nhưng chưa lập hóa đơn VAT
+// 3. Lấy danh sách các đơn đặt tour đã duyệt nhưng chưa lập hóa đơn VAT (Không sử dụng từ khóa JOIN)[cite: 2]
 $sqlPendingInvoices = "SELECT b.*, c.fullname AS customer_name, c.phone AS customer_phone, t.title AS tour_title
                        FROM bookings b, customers c, tour_departures dep, tours t
                        WHERE b.customer_id = c.customer_id 
@@ -151,11 +154,11 @@ $sqlPendingInvoices = "SELECT b.*, c.fullname AS customer_name, c.phone AS custo
                        ORDER BY b.booking_id DESC";
 $pending_bookings = $pdo->query($sqlPendingInvoices)->fetchAll();
 
-// 4. Lấy danh sách toàn bộ hóa đơn VAT đã phát hành
-$sqlInvoices = "SELECT i.*, b.booking_code, u.fullname AS accountant_name
-                FROM invoices i
-                JOIN bookings b ON i.booking_id = b.booking_id
-                LEFT JOIN users u ON i.created_by = u.user_id
+// 4. Lấy danh sách toàn bộ hóa đơn VAT đã phát hành (Không sử dụng từ khóa JOIN)[cite: 2]
+$sqlInvoices = "SELECT i.*, b.booking_code,
+                       (SELECT u.fullname FROM users u WHERE u.user_id = i.created_by) AS accountant_name
+                FROM invoices i, bookings b
+                WHERE i.booking_id = b.booking_id
                 ORDER BY i.invoice_id DESC";
 $invoices = $pdo->query($sqlInvoices)->fetchAll();
 
@@ -164,7 +167,7 @@ include '../../includes/header.php';
 ?>
 
 <div class="flex min-h-screen bg-slate-100">
-    <!-- Nạp Sidebar Admin dùng chung -->
+    <!-- Nạp Sidebar Admin dùng chung[cite: 1] -->
     <?php include '../../includes/admin_sidebar.php'; ?>
 
     <main class="flex-1 p-8 space-y-6 overflow-y-auto">
@@ -179,11 +182,11 @@ include '../../includes/header.php';
         </div>
 
         <?php if (!empty($msg_success)): ?>
-            <div class="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl flex items-center gap-2 font-bold">
+            <div class="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl flex items-center gap-2 font-bold shadow-sm">
                 <i data-lucide="check-circle" class="w-4 h-4 text-emerald-600 shrink-0"></i> <?= $msg_success ?>
             </div>
         <?php elseif (!empty($msg_error)): ?>
-            <div class="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl flex items-center gap-2 font-bold">
+            <div class="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl flex items-center gap-2 font-bold shadow-sm">
                 <i data-lucide="alert-circle" class="w-4 h-4 text-rose-600 shrink-0"></i> <?= $msg_error ?>
             </div>
         <?php endif; ?>
@@ -198,12 +201,24 @@ include '../../includes/header.php';
                 </div>
                 <div class="p-4 divide-y divide-slate-100">
                     <?php foreach ($pending_bookings as $pb): ?>
-                        <?php $must_pay = $pb['total_amount'] - $pb['paid_amount']; ?>
+                        <?php 
+                        $must_pay = (float)$pb['total_amount'] - (float)$pb['paid_amount']; 
+                        
+                        // Đếm số lượng phòng đơn của đơn này[cite: 2]
+                        $stCountSingle = $pdo->prepare("SELECT COUNT(*) FROM booking_passengers WHERE booking_id = ? AND single_room = 1");
+                        $stCountSingle->execute([$pb['booking_id']]);
+                        $has_single = (int)$stCountSingle->fetchColumn();
+                        ?>
                         <div class="py-3.5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-xs">
                             <div class="space-y-1">
                                 <div class="flex items-center gap-2">
-                                    <span class="font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">#<?= $pb['booking_code'] ?></span>
+                                    <span class="font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">#<?= htmlspecialchars($pb['booking_code']) ?></span>
                                     <strong class="text-slate-800 text-sm"><?= htmlspecialchars($pb['customer_name']) ?> (<?= $pb['customer_phone'] ?>)</strong>
+                                    <?php if ($has_single > 0): ?>
+                                        <span class="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-300">
+                                            <?= $has_single ?> Khách phòng đơn
+                                        </span>
+                                    <?php endif; ?>
                                 </div>
                                 <p class="text-slate-500 font-medium"><?= htmlspecialchars($pb['tour_title']) ?></p>
                                 <div class="text-slate-500">
@@ -213,21 +228,23 @@ include '../../includes/header.php';
                                 </div>
                             </div>
 
-                            <!-- Form nhập thông tin xuất hóa đơn (nếu có xuất cho cơ quan) -->
+                            <!-- Form nhập thông tin xuất hóa đơn (nếu có xuất cho cơ quan)[cite: 2] -->
                             <form method="POST" class="w-full md:w-auto flex flex-col sm:flex-row items-end sm:items-center gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
                                 <input type="hidden" name="action" value="settle_and_create_invoice">
                                 <input type="hidden" name="booking_id" value="<?= $pb['booking_id'] ?>">
                                 
                                 <div class="w-full sm:w-44">
-                                    <input type="text" name="company_name" placeholder="Tên cơ quan/công ty (nếu có)" class="w-full border rounded-lg p-1.5 text-[11px]">
+                                    <input type="text" name="company_name" placeholder="Tên cơ quan/công ty (nếu có)" class="w-full border rounded-lg p-1.5 text-[11px] focus:ring-1 focus:ring-blue-500">
                                 </div>
                                 <div class="w-full sm:w-28">
-                                    <input type="text" name="tax_code" placeholder="Mã số thuế" class="w-full border rounded-lg p-1.5 text-[11px]">
+                                    <input type="text" name="tax_code" placeholder="Mã số thuế" class="w-full border rounded-lg p-1.5 text-[11px] focus:ring-1 focus:ring-blue-500">
                                 </div>
                                 <div class="w-full sm:w-28">
-                                    <select name="payment_method" class="w-full border rounded-lg p-1.5 text-[11px]">
+                                    <select name="payment_method" class="w-full border rounded-lg p-1.5 text-[11px] focus:ring-1 focus:ring-blue-500">
                                         <option value="Chuyển khoản">Chuyển khoản</option>
                                         <option value="Tiền mặt">Tiền mặt</option>
+                                        <option value="VNPAY">VNPAY</option>
+                                        <option value="Thẻ tín dụng">Thẻ tín dụng</option>
                                     </select>
                                 </div>
                                 <button type="submit" onclick="return confirm('Xác nhận thu đủ số tiền còn lại và phát hành Hóa đơn VAT?')"
@@ -241,10 +258,13 @@ include '../../includes/header.php';
             </div>
         <?php endif; ?>
 
-        <!-- Khu vực 2: Danh sách Hóa đơn VAT đã phát hành -->
+        <!-- Khu vực 2: Danh sách Hóa đơn VAT đã phát hành[cite: 2] -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-            <div class="p-4 bg-slate-50 border-b border-slate-200 font-bold text-xs text-slate-700 uppercase tracking-wide flex items-center gap-2">
-                <i data-lucide="file-text" class="w-4 h-4 text-blue-600"></i> Danh Sách Hóa Đơn Điện Tử Đã Phát Hành
+            <div class="p-4 bg-slate-50 border-b border-slate-200 font-bold text-xs text-slate-700 uppercase tracking-wide flex items-center justify-between">
+                <span class="flex items-center gap-2">
+                    <i data-lucide="file-text" class="w-4 h-4 text-blue-600"></i> Danh Sách Hóa Đơn Điện Tử Đã Phát Hành (<?= count($invoices) ?>)
+                </span>
+                <span class="text-slate-400 font-normal lowercase text-[11px]">Ký hiệu mẫu hóa đơn: C26TAA</span>
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full text-left text-xs text-slate-600">
@@ -273,17 +293,17 @@ include '../../includes/header.php';
                                 <td class="p-3.5 font-mono text-slate-500">#<?= $inv['booking_code'] ?></td>
                                 <td class="p-3.5">
                                     <strong class="text-slate-800 block"><?= htmlspecialchars($inv['company_name'] ?: $inv['buyer_name']) ?></strong>
-                                    <span class="text-slate-400 text-[11px]"><?= $inv['tax_code'] ? 'MST: ' . $inv['tax_code'] : 'Khách cá nhân' ?></span>
+                                    <span class="text-slate-400 text-[11px]"><?= $inv['tax_code'] ? 'MST: ' . htmlspecialchars($inv['tax_code']) : 'Khách cá nhân' ?></span>
                                 </td>
-                                <td class="p-3.5 text-slate-500"><?= date('d/m/Y H:i', strtotime($inv['issue_date'])) ?></td>
+                                <td class="p-3.5 text-slate-500 whitespace-nowrap"><?= date('d/m/Y H:i', strtotime($inv['issue_date'])) ?></td>
                                 <td class="p-3.5 text-right font-medium"><?= number_format($inv['subtotal_amount'], 0, ',', '.') ?> đ</td>
                                 <td class="p-3.5 text-right text-rose-600 font-medium"><?= number_format($inv['vat_amount'], 0, ',', '.') ?> đ</td>
                                 <td class="p-3.5 text-right font-bold text-emerald-600"><?= number_format($inv['total_amount'], 0, ',', '.') ?> đ</td>
                                 <td class="p-3.5 text-center text-slate-500"><?= htmlspecialchars($inv['accountant_name'] ?? 'Admin') ?></td>
-                                <td class="p-3.5 text-center">
+                                <td class="p-3.5 text-center whitespace-nowrap">
                                     <a href="<?= BASE_URL ?>modules/accounting/invoice_detail.php?id=<?= $inv['invoice_id'] ?>" target="_blank"
-                                       class="inline-block bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white px-2.5 py-1 rounded text-[11px] font-bold transition">
-                                        Xem & In VAT
+                                       class="inline-flex items-center gap-1 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white px-2.5 py-1 rounded text-[11px] font-bold transition shadow-sm">
+                                        <i data-lucide="printer" class="w-3.5 h-3.5"></i> Xem & In VAT
                                     </a>
                                 </td>
                             </tr>
@@ -295,6 +315,8 @@ include '../../includes/header.php';
     </main>
 </div>
 
-<script>lucide.createIcons();</script>
+<script>
+    lucide.createIcons();
+</script>
 </body>
 </html>
