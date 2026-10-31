@@ -1,6 +1,7 @@
 <?php
-// modules/admin/guide_assign.php
-require_once '../../config/database.php';
+require_once __DIR__ . '/../../includes/auth.php';
+
+require_roles(['Administrator', 'Tour Operator']);
 
 // Xử lý phân công Hướng dẫn viên
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['assign_guide'])) {

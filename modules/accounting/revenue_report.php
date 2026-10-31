@@ -1,9 +1,16 @@
 <?php
-require_once '../../config/database.php';
+// modules/accounting/revenue_report.php
+require_once __DIR__ . '/../../config/constants.php';
+require_once __DIR__ . '/../../config/database.php';
+require_once __DIR__ . '/../../includes/auth.php';
+
+// 1. Phân quyền chặt chẽ ngay từ đầu: Chỉ Admin và Kế toán viên mới được xem
+require_roles(['Administrator', 'Accountant']);
+
 $page_title = "Báo cáo Doanh thu & Quản lý Hóa đơn VAT";
 include '../../includes/header.php';
 
-// 1. Lấy dữ liệu doanh thu tháng hiện tại và năm nay từ 2 SQL Views
+// 2. Lấy dữ liệu doanh thu tháng hiện tại và năm nay từ 2 SQL Views
 $cur_year = date('Y');
 $cur_month = date('m');
 
@@ -15,7 +22,7 @@ $stmtYear = $pdo->prepare("SELECT * FROM v_yearly_revenue WHERE year = ?");
 $stmtYear->execute([$cur_year]);
 $year_data = $stmtYear->fetch();
 
-// 2. Lấy danh sách các hóa đơn đã phát hành gần nhất
+// 3. Lấy danh sách các hóa đơn đã phát hành gần nhất
 $invoices = $pdo->query("SELECT i.*, b.booking_code 
                          FROM invoices i 
                          JOIN bookings b ON i.booking_id = b.booking_id 
@@ -23,29 +30,11 @@ $invoices = $pdo->query("SELECT i.*, b.booking_code
 ?>
 
 <div class="flex min-h-screen bg-slate-100">
-    <!-- Sidebar Admin -->
-    <div class="w-64 bg-slate-900 text-slate-300 flex flex-col p-4 space-y-6">
-        <div class="font-extrabold text-white text-base tracking-wide flex items-center gap-2">
-            <i data-lucide="layout-dashboard" class="w-5 h-5 text-blue-400"></i> BAN QUẢN TRỊ
-        </div>
-        <div class="space-y-1 text-sm font-medium">
-            <a href="/dulichvietnam/modules/admin/dashboard.php" class="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-slate-800 transition">
-                <i data-lucide="pie-chart" class="w-4 h-4"></i> Tổng quan
-            </a>
-            <a href="/dulichvietnam/modules/admin/booking_manager.php" class="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-slate-800 transition">
-                <i data-lucide="ticket" class="w-4 h-4"></i> Quản lý Đặt tour
-            </a>
-            <a href="/dulichvietnam/modules/accounting/revenue_report.php" class="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-blue-600 text-white shadow-md">
-                <i data-lucide="receipt" class="w-4 h-4"></i> Hóa đơn & Doanh thu
-            </a>
-            <a href="/dulichvietnam/index.php" class="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-slate-800 transition text-slate-400 pt-6">
-                <i data-lucide="log-out" class="w-4 h-4"></i> Về cổng du khách
-            </a>
-        </div>
-    </div>
+    <!-- Nạp Sidebar Admin dùng chung đã phân quyền động -->
+    <?php include '../../includes/admin_sidebar.php'; ?>
 
     <!-- Main Content -->
-    <div class="flex-1 p-8 space-y-6 overflow-y-auto">
+    <main class="flex-1 p-8 space-y-6 overflow-y-auto">
         <div class="flex items-center justify-between border-b border-slate-200 pb-4">
             <div>
                 <h1 class="text-2xl font-black text-slate-900">Báo Cáo Doanh Thu & Hóa Đơn Điện Tử VAT</h1>
@@ -92,7 +81,7 @@ $invoices = $pdo->query("SELECT i.*, b.booking_code
             </div>
         </div>
 
-        <!-- Bảng hóa đơn điện tử -->
+        <!-- Bảng danh sách hóa đơn điện tử VAT -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
             <div class="p-4 bg-slate-50 border-b border-slate-200 font-bold text-sm text-slate-700 flex items-center gap-2">
                 <i data-lucide="file-text" class="w-4 h-4 text-blue-600"></i> Danh Sách Hóa Đơn VAT Vừa Phát Hành
@@ -109,6 +98,7 @@ $invoices = $pdo->query("SELECT i.*, b.booking_code
                             <th class="p-3.5 text-right">VAT (8%)</th>
                             <th class="p-3.5 text-right">Tổng Thanh Toán</th>
                             <th class="p-3.5 text-center">Trạng Thái</th>
+                            <th class="p-3.5 text-center">Thao Tác</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 font-medium">
@@ -126,13 +116,19 @@ $invoices = $pdo->query("SELECT i.*, b.booking_code
                                         <?= $inv['status'] ?>
                                     </span>
                                 </td>
+                                <td class="p-3.5 text-center">
+                                    <a href="/dulichvietnam/modules/accounting/invoice_detail.php?id=<?= $inv['invoice_id'] ?>" 
+                                       class="inline-block bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white px-2.5 py-1 rounded text-[11px] font-bold transition">
+                                        Xem & In
+                                    </a>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             </div>
         </div>
-    </div>
+    </main>
 </div>
 
 <script>lucide.createIcons();</script>
