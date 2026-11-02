@@ -70,11 +70,19 @@ if ($u && isset($u['role_name']) && $u['role_name'] === 'Tour Guide' && isset($u
             </a>
         <?php endif; ?>
 
-        <!-- 3. Quản lý Đơn đặt & Khách hàng (Admin, Sales Staff, Accountant)[cite: 2] -->
+        <!-- 3. Quản lý Đặt tour (Booking) (Admin, Sales Staff, Accountant)[cite: 2] -->
         <?php if (has_role(['Administrator', 'Sales Staff', 'Accountant'])): ?>
             <a href="<?= BASE_URL ?>modules/admin/booking_manager.php" 
                class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition <?= $current_page === 'booking_manager.php' ? 'bg-blue-600 text-white shadow' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200' ?>">
                 <i data-lucide="ticket" class="w-4 h-4"></i> Quản lý Đặt tour (Booking)
+            </a>
+        <?php endif; ?>
+
+        <!-- 3.1. Quản lý Khách hàng & Điểm thưởng (Tất cả tài khoản được cấp quyền, ngoại trừ Khách hàng role_id = 6)[cite: 2] -->
+        <?php if ($u && (!has_role(['Customer']) && ($u['role_id'] ?? 0) != 6)): ?>
+            <a href="<?= BASE_URL ?>modules/admin/customer_manager.php" 
+               class="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition <?= $current_page === 'customer_manager.php' ? 'bg-blue-600 text-white shadow' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200' ?>">
+                <i data-lucide="award" class="w-4 h-4 text-amber-400"></i> Quản lý Khách hàng & Điểm
             </a>
         <?php endif; ?>
 
